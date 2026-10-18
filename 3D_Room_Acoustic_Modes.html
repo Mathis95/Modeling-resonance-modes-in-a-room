@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<!--
+  3D Room Acoustic Modes
+  Author: Mathis HOCHMUTH
+  Interactive visualisation of the standing-wave modes of a rectangular room (three.js r128).
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="author" content="Mathis HOCHMUTH">
+  <title>3D Room Acoustic Modes</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #111827;
+      color: #fff;
+      overflow: hidden;
+      -webkit-text-size-adjust: 100%;
+    }
+
+    /* ---------- Layout ---------- */
+    #container {
+      width: 100%;
+      height: 100vh;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;          /* portrait phone: scene on top, controls below */
+    }
+    #canvas-container {
+      flex: 1 1 auto;
+      min-width: 0;
+      min-height: 38%;
+      position: relative;
+      overflow: hidden;
+      touch-action: none;              /* finger orbits the scene instead of scrolling the page */
+      cursor: grab;
+    }
+    #canvas-container:active { cursor: grabbing; }
+    /* The canvas is taken out of the layout flow: its size can never feed back into the
+       container's size, which is what triggered the ResizeObserver loop error. */
+    #canvas-container canvas {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    #hint {
+      position: absolute;
+      left: 8px; bottom: 8px;
+      z-index: 1;
+      font-size: 12px;
+      color: #9ca3af;
+      background: rgba(17, 24, 39, .65);
+      padding: 4px 8px;
+      border-radius: 6px;
+      pointer-events: none;
+    }
+
+    #controls {
+      flex: 0 1 auto;
+      max-height: 56%;
+      overflow-y: auto;                /* everything stays reachable, even on small screens */
+      -webkit-overflow-scrolling: touch;
+      background: #1f2937;
+      padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+      border-top: 2px solid #06b6d4;
+    }
+
+    /* Wide screen or landscape phone: scene on the left, panel on the right */
+    @media (orientation: landscape) and (min-width: 700px) {
+      #container { flex-direction: row; }
+      #canvas-container { min-height: 0; }
+      #controls {
+        flex: 0 0 clamp(320px, 38vw, 460px);
+        max-height: none;
+        height: 100%;
+        border-top: none;
+        border-left: 2px solid #06b6d4;
+        padding: 14px calc(14px + env(safe-area-inset-right)) 14px 14px;
+      }
+    }
+
+    /* ---------- Panel content ---------- */
+    .title { text-align: center; margin-bottom: 10px; }
+    .title h2 { font-size: clamp(18px, 4.2vw, 24px); margin-bottom: 4px; }
+    .frequency { font-size: clamp(16px, 3.6vw, 18px); color: #06b6d4; font-family: ui-monospace, Menlo, Consolas, monospace; }
+    .subtitle { font-size: 13px; color: #9ca3af; margin-top: 3px; }
+
+    button { font: inherit; color: #fff; -webkit-tap-highlight-color: transparent; }
+    .action {
+      min-height: 44px;                /* comfortable touch target */
+      padding: 8px 16px;
+      background: #0891b2;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .action:hover { background: #0e7490; }
+    .action.off { background: #374151; color: #d1d5db; }
+    .action.small { min-height: 36px; font-size: 13px; padding: 6px 12px; background: #374151; }
+    .action.small:hover { background: #4b5563; }
+
+    .button-container {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 10px 14px;
+      margin: 12px 0;
+    }
+
+    /* Sliders (wave speed, rotation) */
+    .sliders { display: grid; gap: 4px; margin: 6px auto 12px; max-width: 520px; }
+    .slider-row {
+      display: grid;
+      grid-template-columns: minmax(86px, 120px) 1fr 64px;
+      align-items: center;
+      gap: 10px;
+      min-height: 40px;
+    }
+    .slider-row label { font-size: 14px; }
+    .slider-row input[type=range] { width: 100%; height: 28px; }
+    .slider-value { color: #06b6d4; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; text-align: right; }
+
+    /* Room dimensions */
+    .section { background: #111827; border-radius: 10px; padding: 10px 12px; margin: 12px auto; max-width: 520px; }
+    .section h3 { font-size: 14px; font-weight: 600; margin-bottom: 6px; color: #e5e7eb; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .dim-row {
+      display: grid;
+      grid-template-columns: minmax(86px, 120px) 1fr 76px;
+      align-items: center;
+      gap: 10px;
+      min-height: 42px;
+    }
+    .dim-row label { font-size: 14px; display: flex; align-items: center; gap: 6px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+    .dim-row input[type=range] { width: 100%; height: 28px; }
+    .dim-input { display: flex; align-items: center; gap: 4px; font-size: 13px; color: #9ca3af; }
+    .dim-input input {
+      width: 100%;
+      min-width: 0;
+      height: 36px;
+      background: #1f2937;
+      color: #fff;
+      border: 1px solid #374151;
+      border-radius: 6px;
+      padding: 0 6px;
+      font-size: 15px;
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      text-align: right;
+    }
+    .dim-input input:focus { outline: 2px solid #06b6d4; border-color: transparent; }
+
+    /* Modes: 3 groups (one per nx) of 3×3 buttons */
+    #mode-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+      margin: 12px auto;
+      max-width: 720px;
+    }
+    .mode-group { background: #111827; border-radius: 10px; padding: 8px; }
+    .mode-group-title { font-size: 12px; color: #9ca3af; text-align: center; margin-bottom: 6px; }
+    .mode-group-buttons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    .mode-button {
+      min-height: 40px;
+      padding: 6px 2px;
+      background: #374151;
+      border: none;
+      border-radius: 6px;
+      color: #d1d5db;
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all .2s;
+    }
+    .mode-button:hover { background: #4b5563; }
+    .mode-button.active { background: #06b6d4; color: #fff; box-shadow: 0 0 16px rgba(6,182,212,.5); }
+
+    .info { text-align: center; font-size: 13px; line-height: 1.45; color: #9ca3af; margin-top: 10px; }
+    .info p { margin: 5px 0; }
+    .credit { text-align: center; font-size: 12px; color: #6b7280; margin-top: 14px; padding-top: 10px; border-top: 1px solid #374151; }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <div id="canvas-container">
+      <div id="hint">Drag: rotate · Pinch / wheel: zoom</div>
+    </div>
+
+    <div id="controls">
+      <div class="title">
+        <h2>Mode (<span id="mode-nx">1</span>, <span id="mode-ny">1</span>, <span id="mode-nz">1</span>)</h2>
+        <div>Frequency: <span class="frequency" id="frequency">0.00 Hz</span></div>
+        <p class="subtitle" id="room-subtitle"></p>
+      </div>
+
+      <div class="button-container">
+        <button class="action" id="play-pause">⏸ Pause</button>
+        <button class="action" id="auto-rotate" aria-pressed="true">🔄 Auto-rotate</button>
+        <button class="action" id="reset-view">🎯 Reset view</button>
+      </div>
+
+      <div class="sliders">
+        <div class="slider-row">
+          <label for="speed">Wave speed</label>
+          <input type="range" id="speed" min="0.5" max="3" step="0.5" value="1">
+          <span class="slider-value" id="speed-value">1x</span>
+        </div>
+        <div class="slider-row">
+          <label for="rot-speed">Rotation speed</label>
+          <input type="range" id="rot-speed" min="-60" max="60" step="1" value="6">
+          <span class="slider-value" id="rot-speed-value">6°/s</span>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>
+          <span>📐 Room dimensions</span>
+          <button class="action small" id="reset-dims">Reset</button>
+        </h3>
+        <div id="dims"></div>
+      </div>
+
+      <div id="mode-grid"></div>
+
+      <div class="info">
+        <p>💡 The spheres move and change size following the pressure wave</p>
+        <p>Cyan = high pressure | Purple = low pressure</p>
+        <p>🎯 <span style="color:#ff5555;">X axis (red)</span> = <span id="info-x"></span> |
+           <span style="color:#44dd44;">Y axis (green)</span> = <span id="info-y"></span> |
+           <span style="color:#6688ff;">Z axis (blue)</span> = <span id="info-z"></span></p>
+      </div>
+
+      <p class="credit">Created by Mathis HOCHMUTH</p>
+    </div>
+  </div>
+
+  <script>
+    // 3D Room Acoustic Modes — Author: Mathis HOCHMUTH
+
+    // ---------- Configuration ----------
+    // dim.x = length (red X axis), dim.y = height (green Y axis, vertical), dim.z = depth (blue Z axis)
+    const DEFAULT_DIMS = { x: 10, y: 2.5, z: 5 };
+    const DIM_MIN = 1, DIM_MAX = 30;
+    const dim = { ...DEFAULT_DIMS };
+    const c = 343;                                // speed of sound (m/s)
+    let currentMode = { nx: 1, ny: 1, nz: 1 };    // nx ↔ X axis, ny ↔ Z axis, nz ↔ Y axis (as in the original version)
+    let isAnimating = true;
+    let autoRotate = true;
+    let speed = 1;
+    let rotSpeedDeg = 6;                          // °/s, negative = reverse direction
+    let localTime = 0;
+    let modelAngle = 0;
+
+    // Modest device (phone / small screen): fewer spheres and facets
+    const lowPower = Math.min(window.screen.width, window.screen.height) < 600 ||
+                     window.matchMedia('(pointer: coarse)').matches;
+    const resolution = lowPower ? 8 : 12;
+    const sphereSegments = lowPower ? 10 : 16;
+    const BASE_RADIUS = lowPower ? 0.2 : 0.15;
+
+    // ---------- Scene ----------
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x000510);
+
+    const container = document.getElementById('canvas-container');
+    const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: !lowPower });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    container.appendChild(renderer.domElement);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+    const pointLight = new THREE.PointLight(0xffffff, 1);
+    pointLight.position.set(15, 15, 15);
+    scene.add(pointLight);
+
+    // The whole model lives in one group that spins on itself
+    const model = new THREE.Group();
+    scene.add(model);
+
+    // Room frame (unit box, scaled to the current dimensions)
+    const frame = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+      new THREE.LineBasicMaterial({ color: 0x00ffff })
+    );
+    model.add(frame);
+
+    // Floor
+    const bottomPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({ color: 0x1a1a3a, transparent: true, opacity: 0.1, side: THREE.DoubleSide })
+    );
+    bottomPlane.rotation.x = Math.PI / 2;
+    model.add(bottomPlane);
+
+    // ---------- Axes ----------
+    const AXIS_BASE = 12, axisRadius = 0.05;
+    const axes = new THREE.Group();
+    model.add(axes);
+
+    function makeAxis(color, label, rotAxis, rotAngle, dir) {
+      const mat = new THREE.MeshBasicMaterial({ color });
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(axisRadius, axisRadius, AXIS_BASE, 8), mat);
+      if (rotAxis) shaft.rotation[rotAxis] = rotAngle;
+      axes.add(shaft);
+
+      const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.4, 8), mat);
+      if (rotAxis) arrow.rotation[rotAxis] = -rotAngle;
+      arrow.position.copy(dir).multiplyScalar(AXIS_BASE / 2 + 0.2);
+      axes.add(arrow);
+
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 128;
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#' + color.toString(16).padStart(6, '0');
+      ctx.font = 'Bold 80px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText(label, 64, 90);
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv) }));
+      sprite.position.copy(dir).multiplyScalar(AXIS_BASE / 2 + 1);
+      sprite.scale.set(1, 1, 1);
+      axes.add(sprite);
+    }
+    makeAxis(0xff0000, 'X', 'z',  Math.PI / 2, new THREE.Vector3(1, 0, 0));
+    makeAxis(0x00ff00, 'Y', null, 0,           new THREE.Vector3(0, 1, 0));
+    makeAxis(0x0000ff, 'Z', 'x',  Math.PI / 2, new THREE.Vector3(0, 0, 1));
+
+    // ---------- Spheres ----------
+    // Positions are stored as normalised coordinates u, v, w ∈ [-0.5, 0.5] (X, Y vertical, Z)
+    const spheres = [];
+    const sphereGeometry = new THREE.SphereGeometry(BASE_RADIUS, sphereSegments, sphereSegments);
+
+    for (let i = 0; i <= resolution; i++) {
+      for (let j = 0; j <= resolution; j++) {
+        for (let k = 0; k <= resolution; k++) {
+          const material = new THREE.MeshPhongMaterial({
+            color: 0x00ffff, emissive: 0x0088ff, shininess: 100, transparent: true, opacity: 0.8
+          });
+          const sphere = new THREE.Mesh(sphereGeometry, material);
+          sphere.userData = { u: i / resolution - 0.5, v: k / resolution - 0.5, w: j / resolution - 0.5 };
+          model.add(sphere);
+          spheres.push(sphere);
+        }
+      }
+    }
+
+    // ---------- Dimensions ----------
+    let sphereFactor = 1;   // sphere size and displacement amplitude, proportional to the room
+
+    function fmt(n) { return Number(n.toFixed(1)).toString(); }
+
+    function applyDims() {
+      frame.scale.set(dim.x, dim.y, dim.z);
+      bottomPlane.scale.set(dim.x, dim.z, 1);
+      bottomPlane.position.y = -dim.y / 2;
+      axes.scale.setScalar(Math.max(dim.x, dim.y, dim.z) * 1.2 / AXIS_BASE);
+
+      const volumeScale = Math.cbrt(dim.x * dim.y * dim.z) / 5;
+      const spacingScale = (Math.min(dim.x, dim.y, dim.z) / resolution) / (2.5 / 12);
+      sphereFactor = Math.max(0.05, Math.min(volumeScale, spacingScale));
+
+      document.getElementById('room-subtitle').textContent =
+        `Room: X ${fmt(dim.x)} m × Y ${fmt(dim.y)} m (height) × Z ${fmt(dim.z)} m`;
+      document.getElementById('info-x').textContent = fmt(dim.x) + ' m';
+      document.getElementById('info-y').textContent = fmt(dim.y) + ' m';
+      document.getElementById('info-z').textContent = fmt(dim.z) + ' m';
+      updateFrequency();
+    }
+
+    // ---------- Physics ----------
+    function calculatePressure(u, v, w, nx, ny, nz, t) {
+      const px = Math.cos(nx * Math.PI * (u + 0.5));
+      const py = Math.cos(nz * Math.PI * (v + 0.5));
+      const pz = Math.cos(ny * Math.PI * (w + 0.5));
+      return px * py * pz * Math.cos(t);
+    }
+
+    // Rectangular-room resonance: f = (c / 2) · sqrt((nx/Lx)² + (ny/Lz)² + (nz/Ly)²)
+    function updateFrequency() {
+      const freq = (c / 2) * Math.sqrt(
+        Math.pow(currentMode.nx / dim.x, 2) +
+        Math.pow(currentMode.ny / dim.z, 2) +
+        Math.pow(currentMode.nz / dim.y, 2)
+      );
+      document.getElementById('frequency').textContent = freq.toFixed(2) + ' Hz';
+      document.getElementById('mode-nx').textContent = currentMode.nx;
+      document.getElementById('mode-ny').textContent = currentMode.ny;
+      document.getElementById('mode-nz').textContent = currentMode.nz;
+    }
+
+    // ---------- Orbit camera (mouse + touch) ----------
+    const HOME = { theta: Math.PI / 4, phi: 1.15, zoom: 1 };
+    let theta = HOME.theta, phi = HOME.phi, zoom = HOME.zoom;
+
+    // Distance that keeps the whole room visible whatever the screen shape and dimensions
+    function fitDistance() {
+      const k = Math.max(dim.x, dim.y, dim.z) / 10;
+      const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+      return Math.max(8 * k / (tanV * camera.aspect), 7 * k / tanV) * 1.5;
+    }
+
+    function updateCamera() {
+      const r = fitDistance() * zoom;
+      camera.position.set(
+        r * Math.sin(phi) * Math.cos(theta),
+        r * Math.cos(phi),
+        r * Math.sin(phi) * Math.sin(theta)
+      );
+      camera.lookAt(0, 0, 0);
+    }
+
+    const pointers = new Map();
+    let pinchStart = 0, zoomStart = 1;
+    const el = renderer.domElement;
+
+    el.addEventListener('pointerdown', e => {
+      el.setPointerCapture(e.pointerId);
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()];
+        pinchStart = Math.hypot(a.x - b.x, a.y - b.y);
+        zoomStart = zoom;
+      }
+    });
+    el.addEventListener('pointermove', e => {
+      const p = pointers.get(e.pointerId);
+      if (!p) return;
+      if (pointers.size === 1) {
+        theta -= (e.clientX - p.x) * 0.006;
+        phi = Math.min(Math.max(phi - (e.clientY - p.y) * 0.006, 0.15), Math.PI - 0.15);
+      }
+      p.x = e.clientX; p.y = e.clientY;
+      if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()];
+        const d = Math.hypot(a.x - b.x, a.y - b.y);
+        if (pinchStart > 0) zoom = Math.min(Math.max(zoomStart * pinchStart / d, 0.4), 2);
+      }
+    });
+    const endPointer = e => pointers.delete(e.pointerId);
+    el.addEventListener('pointerup', endPointer);
+    el.addEventListener('pointercancel', endPointer);
+    el.addEventListener('wheel', e => {
+      e.preventDefault();
+      zoom = Math.min(Math.max(zoom * (1 + Math.sign(e.deltaY) * 0.08), 0.4), 2);
+    }, { passive: false });
+
+    // ---------- Resizing ----------
+    function resize() {
+      const w = Math.max(container.clientWidth, 1);
+      const h = Math.max(container.clientHeight, 1);
+      renderer.setSize(w, h, false);       // false: CSS keeps controlling the canvas display size
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    }
+
+    // The observer callback only schedules the work for the next animation frame, so layout
+    // changes made while resizing can never produce the
+    // "ResizeObserver loop completed with undelivered notifications" error.
+    let resizePending = false;
+    function scheduleResize() {
+      if (resizePending) return;
+      resizePending = true;
+      requestAnimationFrame(() => { resizePending = false; resize(); });
+    }
+    new ResizeObserver(scheduleResize).observe(container);   // covers screen rotation, mobile address bar, etc.
+    window.addEventListener('resize', scheduleResize);
+
+    // ---------- Animation ----------
+    let lastFrame = performance.now();
+    function animate(now) {
+      requestAnimationFrame(animate);
+      const dt = Math.min((now - lastFrame) / 1000, 0.1);
+      lastFrame = now;
+
+      if (isAnimating) localTime += 1.8 * speed * dt;   // independent of the display refresh rate
+      if (autoRotate && pointers.size === 0) {
+        modelAngle += THREE.MathUtils.degToRad(rotSpeedDeg) * dt;
+      }
+      model.rotation.y = modelAngle;
+
+      const { nx, ny, nz } = currentMode;
+      const amp = 0.24 * sphereFactor;
+      for (const sphere of spheres) {
+        const { u, v, w } = sphere.userData;
+        const pressure = calculatePressure(u, v, w, nx, ny, nz, localTime);
+        const displacement = pressure * amp;
+
+        const dx = nx > 0 ? Math.sin(nx * Math.PI * (u + 0.5)) * displacement : 0;
+        const dy = nz > 0 ? Math.sin(nz * Math.PI * (v + 0.5)) * displacement : 0;
+        const dz = ny > 0 ? Math.sin(ny * Math.PI * (w + 0.5)) * displacement : 0;
+        sphere.position.set(u * dim.x + dx, v * dim.y + dy, w * dim.z + dz);
+
+        const scale = sphereFactor * (1 + Math.abs(pressure) * 0.5);
+        sphere.scale.set(scale, scale, scale);
+
+        const intensity = (pressure + 1) / 2;
+        sphere.material.color.setHSL(0.55 + intensity * 0.15, 1, 0.5);
+        sphere.material.emissive.setHSL(0.55 + intensity * 0.15, 1, intensity * 0.3);
+        sphere.material.opacity = 0.6 + Math.abs(pressure) * 0.4;
+      }
+
+      updateCamera();
+      renderer.render(scene, camera);
+    }
+
+    // ---------- UI: dimensions ----------
+    const DIM_UI = [
+      { key: 'x', label: 'X · length', color: '#ff5555' },
+      { key: 'y', label: 'Y · height', color: '#44dd44' },
+      { key: 'z', label: 'Z · depth',  color: '#6688ff' }
+    ];
+    const dimRanges = {}, dimInputs = {};
+    const dimsBox = document.getElementById('dims');
+
+    DIM_UI.forEach(({ key, label, color }) => {
+      const row = document.createElement('div');
+      row.className = 'dim-row';
+      row.innerHTML = `
+        <label for="dim-${key}"><span class="dot" style="background:${color}"></span>${label}</label>
+        <input type="range" id="dim-${key}-range" min="${DIM_MIN}" max="${DIM_MAX}" step="0.1" value="${dim[key]}" aria-label="${label}">
+        <span class="dim-input">
+          <input type="number" id="dim-${key}" min="${DIM_MIN}" max="${DIM_MAX}" step="0.1" value="${dim[key]}" inputmode="decimal">m
+        </span>`;
+      dimsBox.appendChild(row);
+      const range = row.querySelector('input[type=range]');
+      const input = row.querySelector('input[type=number]');
+      dimRanges[key] = range;
+      dimInputs[key] = input;
+
+      range.addEventListener('input', () => {
+        dim[key] = parseFloat(range.value);
+        input.value = dim[key];
+        applyDims();
+      });
+      input.addEventListener('input', () => {
+        const val = parseFloat(String(input.value).replace(',', '.'));
+        if (isFinite(val) && val >= DIM_MIN && val <= DIM_MAX) {
+          dim[key] = val;
+          range.value = val;
+          applyDims();
+        }
+      });
+      input.addEventListener('change', () => {          // restore a valid value if the entry is out of range
+        const val = parseFloat(String(input.value).replace(',', '.'));
+        dim[key] = isFinite(val) ? Math.min(Math.max(val, DIM_MIN), DIM_MAX) : dim[key];
+        input.value = dim[key];
+        range.value = dim[key];
+        applyDims();
+      });
+    });
+
+    document.getElementById('reset-dims').onclick = () => {
+      Object.assign(dim, DEFAULT_DIMS);
+      DIM_UI.forEach(({ key }) => { dimRanges[key].value = dim[key]; dimInputs[key].value = dim[key]; });
+      applyDims();
+    };
+
+    // ---------- UI: modes ----------
+    const modeGrid = document.getElementById('mode-grid');
+    for (let nx = 0; nx <= 2; nx++) {
+      const group = document.createElement('div');
+      group.className = 'mode-group';
+      group.innerHTML = `<div class="mode-group-title">nx = ${nx}</div><div class="mode-group-buttons"></div>`;
+      const holder = group.querySelector('.mode-group-buttons');
+      for (let ny = 0; ny <= 2; ny++) {
+        for (let nz = 0; nz <= 2; nz++) {
+          const btn = document.createElement('button');
+          btn.className = 'mode-button';
+          btn.textContent = `${nx},${ny},${nz}`;
+          btn.setAttribute('aria-label', `Mode ${nx}, ${ny}, ${nz}`);
+          if (nx === 1 && ny === 1 && nz === 1) btn.classList.add('active');
+          btn.onclick = () => {
+            currentMode = { nx, ny, nz };
+            document.querySelectorAll('.mode-button').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            updateFrequency();
+          };
+          holder.appendChild(btn);
+        }
+      }
+      modeGrid.appendChild(group);
+    }
+
+    // ---------- UI: buttons and sliders ----------
+    const playBtn = document.getElementById('play-pause');
+    playBtn.onclick = () => {
+      isAnimating = !isAnimating;
+      playBtn.textContent = isAnimating ? '⏸ Pause' : '▶ Play';
+    };
+
+    const rotBtn = document.getElementById('auto-rotate');
+    rotBtn.onclick = () => {
+      autoRotate = !autoRotate;
+      rotBtn.classList.toggle('off', !autoRotate);
+      rotBtn.setAttribute('aria-pressed', autoRotate);
+    };
+
+    document.getElementById('reset-view').onclick = () => {
+      theta = HOME.theta; phi = HOME.phi; zoom = HOME.zoom; modelAngle = 0;
+    };
+
+    document.getElementById('speed').oninput = e => {
+      speed = parseFloat(e.target.value);
+      document.getElementById('speed-value').textContent = speed + 'x';
+    };
+
+    document.getElementById('rot-speed').oninput = e => {
+      rotSpeedDeg = parseFloat(e.target.value);
+      document.getElementById('rot-speed-value').textContent = rotSpeedDeg + '°/s';
+    };
+
+    // ---------- Start ----------
+    resize();
+    applyDims();
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>
