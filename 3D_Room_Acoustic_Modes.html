@@ -118,7 +118,7 @@
       margin: 12px 0;
     }
 
-    /* Sliders (wave speed, rotation) */
+    /* Sliders (animation speed, rotation) */
     .sliders { display: grid; gap: 4px; margin: 6px auto 12px; max-width: 520px; }
     .slider-row {
       display: grid;
@@ -212,7 +212,7 @@
 
       <div class="sliders">
         <div class="slider-row">
-          <label for="speed">Wave speed</label>
+          <label for="speed">Animation speed</label>
           <input type="range" id="speed" min="0.5" max="3" step="0.5" value="1">
           <span class="slider-value" id="speed-value">1x</span>
         </div>
@@ -234,7 +234,7 @@
       <div id="mode-grid"></div>
 
       <div class="info">
-        <p>💡 The spheres move and change size following the pressure wave</p>
+        <p>💡 Sphere color and size encode the instantaneous pressure; their movement is a stylized visual aid, not the actual motion of air particles</p>
         <p>Cyan = high pressure | Purple = low pressure</p>
         <p>🎯 <span style="color:#ff5555;">X axis (red)</span> = <span id="info-x"></span> |
            <span style="color:#44dd44;">Y axis (green)</span> = <span id="info-y"></span> |
