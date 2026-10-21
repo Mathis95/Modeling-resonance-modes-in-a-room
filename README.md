@@ -118,7 +118,6 @@ The `(0,0,0)` case has zero frequency and represents a spatially uniform pressur
 ```
 .
 ├── 3D_Room_Acoustic_Modes.html   # responsive interactive version
-├── Room_Modes.html               # original interactive version
 └── README.md
 ```
 
