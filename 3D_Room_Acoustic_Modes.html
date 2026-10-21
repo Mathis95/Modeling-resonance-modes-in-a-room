@@ -28,12 +28,12 @@
       height: 100vh;
       height: 100dvh;
       display: flex;
-      flex-direction: column;          /* portrait phone: scene on top, controls below */
+      flex-direction: row;             /* keep controls in a right-hand sidebar at every size */
     }
     #canvas-container {
       flex: 1 1 auto;
       min-width: 0;
-      min-height: 38%;
+      min-height: 0;
       position: relative;
       overflow: hidden;
       touch-action: none;              /* finger orbits the scene instead of scrolling the page */
@@ -63,27 +63,41 @@
     }
 
     #controls {
-      flex: 0 1 auto;
-      max-height: 56%;
+      flex: 0 0 clamp(320px, 38vw, 460px);
+      min-width: 0;
+      height: 100%;
       overflow-y: auto;                /* everything stays reachable, even on small screens */
       -webkit-overflow-scrolling: touch;
       background: #1f2937;
       padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
-      border-top: 2px solid #06b6d4;
+      border-left: 2px solid #06b6d4;
     }
 
-    /* Wide screen or landscape phone: scene on the left, panel on the right */
-    @media (orientation: landscape) and (min-width: 700px) {
-      #container { flex-direction: row; }
-      #canvas-container { min-height: 0; }
+    #controls { padding-right: calc(14px + env(safe-area-inset-right)); }
+
+    @media (max-width: 699px) {
       #controls {
-        flex: 0 0 clamp(320px, 38vw, 460px);
-        max-height: none;
-        height: 100%;
-        border-top: none;
-        border-left: 2px solid #06b6d4;
-        padding: 14px calc(14px + env(safe-area-inset-right)) 14px 14px;
+        flex-basis: min(56vw, 300px);
+        min-width: 180px;
+        padding: 10px 8px;
       }
+      .slider-row {
+        grid-template-columns: minmax(52px, 68px) 1fr 40px;
+        gap: 4px;
+      }
+      .slider-row label, .slider-value { font-size: 12px; }
+      .dim-row {
+        grid-template-columns: minmax(58px, 72px) 1fr 62px;
+        gap: 4px;
+      }
+      .dim-row label { font-size: 12px; }
+      .dim-input { gap: 2px; font-size: 11px; }
+      .dim-input input { font-size: 13px; padding: 0 4px; }
+      .button-container { gap: 6px; }
+      .action { padding: 7px 9px; font-size: 13px; }
+      #mode-grid { grid-template-columns: 1fr; gap: 8px; }
+      .mode-button { min-height: 34px; font-size: 11px; }
+      .info { font-size: 11px; }
     }
 
     /* ---------- Panel content ---------- */
@@ -234,8 +248,12 @@
       <div id="mode-grid"></div>
 
       <div class="info">
-        <p>💡 Sphere color and size encode the instantaneous pressure; their movement is a stylized visual aid, not the actual motion of air particles</p>
-        <p>Cyan = high pressure | Purple = low pressure</p>
+        <p>💡 Over a full cycle, antinodes are where particles travel the farthest; nodes are where they move the least.</p>
+        <p>Pressure and particle displacement profiles are spatially phase-shifted by 90 degrees: a pressure antinode coincides exactly with a displacement node, while a pressure node coincides with a displacement antinode.</p>
+        <p>Violet = negative pressure | bright cyan = positive pressure</p>
+        <p>nx → X (length, toward viewer) | ny → Y (width, left-right) | nz → Z (height, upward)</p>
+        <p>These markers are a visualization, not real particles moving at this visible scale. Real air molecules oscillate over extremely small distances; the displayed motion is greatly exaggerated.</p>
+        <p>The displayed frequency is theoretical; the mode animation is deliberately slowed for visibility. Animation speed changes playback only, not the real resonance frequency or speed of sound.</p>
         <p>🎯 <span style="color:#ff5555;">X axis (red)</span> = <span id="info-x"></span> |
            <span style="color:#44dd44;">Y axis (green)</span> = <span id="info-y"></span> |
            <span style="color:#6688ff;">Z axis (blue)</span> = <span id="info-z"></span></p>
@@ -249,15 +267,15 @@
     // 3D Room Acoustic Modes — Author: Mathis HOCHMUTH
 
     // ---------- Configuration ----------
-    // dim.x = length (red X axis), dim.y = height (green Y axis, vertical), dim.z = depth (blue Z axis)
-    const DEFAULT_DIMS = { x: 10, y: 2.5, z: 5 };
+    // Physical axes: X = length (toward viewer), Y = width (left-right), Z = height (upward)
+    const DEFAULT_DIMS = { x: 10, y: 5, z: 5 };
     const DIM_MIN = 1, DIM_MAX = 30;
     const dim = { ...DEFAULT_DIMS };
     const c = 343;                                // speed of sound (m/s)
-    let currentMode = { nx: 1, ny: 1, nz: 1 };    // nx ↔ X axis, ny ↔ Z axis, nz ↔ Y axis (as in the original version)
+    let currentMode = { nx: 0, ny: 0, nz: 1 };    // nx ↔ X axis, ny ↔ Y axis, nz ↔ Z axis
     let isAnimating = true;
     let autoRotate = true;
-    let speed = 1;
+    let animationSpeed = 1;
     let rotSpeedDeg = 6;                          // °/s, negative = reverse direction
     let localTime = 0;
     let modelAngle = 0;
@@ -267,11 +285,25 @@
                      window.matchMedia('(pointer: coarse)').matches;
     const resolution = lowPower ? 8 : 12;
     const sphereSegments = lowPower ? 10 : 16;
-    const BASE_RADIUS = lowPower ? 0.2 : 0.15;
+    const BASE_RADIUS = 0.17;
 
     // ---------- Scene ----------
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x000510);
+    const negativePressureColor = new THREE.Color(0x6900ff);
+    const positivePressureColor = new THREE.Color(0x00f5ff);
+    const pressureColor = new THREE.Color();
+
+    // Map physical (X, Y, Z) to Three.js (depth, horizontal, vertical) = (Z, X, Y).
+    const coordinateFrame = new THREE.Group();
+    coordinateFrame.matrixAutoUpdate = false;
+    coordinateFrame.matrix.set(
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      1, 0, 0, 0,
+      0, 0, 0, 1
+    );
+    scene.add(coordinateFrame);
 
     const container = document.getElementById('canvas-container');
     const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
@@ -285,9 +317,9 @@
     pointLight.position.set(15, 15, 15);
     scene.add(pointLight);
 
-    // The whole model lives in one group that spins on itself
+    // The model is authored in physical X/Y/Z coordinates and displayed through coordinateFrame.
     const model = new THREE.Group();
-    scene.add(model);
+    coordinateFrame.add(model);
 
     // Room frame (unit box, scaled to the current dimensions)
     const frame = new THREE.LineSegments(
@@ -296,12 +328,11 @@
     );
     model.add(frame);
 
-    // Floor
+    // Floor at the bottom of the room (negative physical Z).
     const bottomPlane = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
       new THREE.MeshBasicMaterial({ color: 0x1a1a3a, transparent: true, opacity: 0.1, side: THREE.DoubleSide })
     );
-    bottomPlane.rotation.x = Math.PI / 2;
     model.add(bottomPlane);
 
     // ---------- Axes ----------
@@ -309,14 +340,15 @@
     const axes = new THREE.Group();
     model.add(axes);
 
-    function makeAxis(color, label, rotAxis, rotAngle, dir) {
+    function makeAxis(color, label, dir) {
       const mat = new THREE.MeshBasicMaterial({ color });
       const shaft = new THREE.Mesh(new THREE.CylinderGeometry(axisRadius, axisRadius, AXIS_BASE, 8), mat);
-      if (rotAxis) shaft.rotation[rotAxis] = rotAngle;
+      const axisRotation = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      shaft.quaternion.copy(axisRotation);
       axes.add(shaft);
 
       const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.4, 8), mat);
-      if (rotAxis) arrow.rotation[rotAxis] = -rotAngle;
+      arrow.quaternion.copy(axisRotation);
       arrow.position.copy(dir).multiplyScalar(AXIS_BASE / 2 + 0.2);
       axes.add(arrow);
 
@@ -332,12 +364,12 @@
       sprite.scale.set(1, 1, 1);
       axes.add(sprite);
     }
-    makeAxis(0xff0000, 'X', 'z',  Math.PI / 2, new THREE.Vector3(1, 0, 0));
-    makeAxis(0x00ff00, 'Y', null, 0,           new THREE.Vector3(0, 1, 0));
-    makeAxis(0x0000ff, 'Z', 'x',  Math.PI / 2, new THREE.Vector3(0, 0, 1));
+    makeAxis(0xff0000, 'X', new THREE.Vector3(1, 0, 0));
+    makeAxis(0x00ff00, 'Y', new THREE.Vector3(0, 1, 0));
+    makeAxis(0x0000ff, 'Z', new THREE.Vector3(0, 0, 1));
 
     // ---------- Spheres ----------
-    // Positions are stored as normalised coordinates u, v, w ∈ [-0.5, 0.5] (X, Y vertical, Z)
+    // Marker positions use normalized physical coordinates u, v, w ∈ [-0.5, 0.5] (X, Y, Z).
     const spheres = [];
     const sphereGeometry = new THREE.SphereGeometry(BASE_RADIUS, sphereSegments, sphereSegments);
 
@@ -345,33 +377,26 @@
       for (let j = 0; j <= resolution; j++) {
         for (let k = 0; k <= resolution; k++) {
           const material = new THREE.MeshPhongMaterial({
-            color: 0x00ffff, emissive: 0x0088ff, shininess: 100, transparent: true, opacity: 0.8
+            color: 0x00ffff, emissive: 0x0088ff, shininess: 100, transparent: true, opacity: 0.95
           });
           const sphere = new THREE.Mesh(sphereGeometry, material);
-          sphere.userData = { u: i / resolution - 0.5, v: k / resolution - 0.5, w: j / resolution - 0.5 };
+          sphere.userData = { u: i / resolution - 0.5, v: j / resolution - 0.5, w: k / resolution - 0.5 };
           model.add(sphere);
           spheres.push(sphere);
         }
       }
     }
 
-    // ---------- Dimensions ----------
-    let sphereFactor = 1;   // sphere size and displacement amplitude, proportional to the room
-
     function fmt(n) { return Number(n.toFixed(1)).toString(); }
 
     function applyDims() {
       frame.scale.set(dim.x, dim.y, dim.z);
-      bottomPlane.scale.set(dim.x, dim.z, 1);
-      bottomPlane.position.y = -dim.y / 2;
+      bottomPlane.scale.set(dim.x, dim.y, 1);
+      bottomPlane.position.z = -dim.z / 2;
       axes.scale.setScalar(Math.max(dim.x, dim.y, dim.z) * 1.2 / AXIS_BASE);
 
-      const volumeScale = Math.cbrt(dim.x * dim.y * dim.z) / 5;
-      const spacingScale = (Math.min(dim.x, dim.y, dim.z) / resolution) / (2.5 / 12);
-      sphereFactor = Math.max(0.05, Math.min(volumeScale, spacingScale));
-
       document.getElementById('room-subtitle').textContent =
-        `Room: X ${fmt(dim.x)} m × Y ${fmt(dim.y)} m (height) × Z ${fmt(dim.z)} m`;
+        `Room: X ${fmt(dim.x)} m (length) × Y ${fmt(dim.y)} m (width) × Z ${fmt(dim.z)} m (height)`;
       document.getElementById('info-x').textContent = fmt(dim.x) + ' m';
       document.getElementById('info-y').textContent = fmt(dim.y) + ' m';
       document.getElementById('info-z').textContent = fmt(dim.z) + ' m';
@@ -381,18 +406,22 @@
     // ---------- Physics ----------
     function calculatePressure(u, v, w, nx, ny, nz, t) {
       const px = Math.cos(nx * Math.PI * (u + 0.5));
-      const py = Math.cos(nz * Math.PI * (v + 0.5));
-      const pz = Math.cos(ny * Math.PI * (w + 0.5));
+      const py = Math.cos(ny * Math.PI * (v + 0.5));
+      const pz = Math.cos(nz * Math.PI * (w + 0.5));
       return px * py * pz * Math.cos(t);
     }
 
-    // Rectangular-room resonance: f = (c / 2) · sqrt((nx/Lx)² + (ny/Lz)² + (nz/Ly)²)
-    function updateFrequency() {
-      const freq = (c / 2) * Math.sqrt(
+    function getModeFrequency() {
+      return (c / 2) * Math.sqrt(
         Math.pow(currentMode.nx / dim.x, 2) +
-        Math.pow(currentMode.ny / dim.z, 2) +
-        Math.pow(currentMode.nz / dim.y, 2)
+        Math.pow(currentMode.ny / dim.y, 2) +
+        Math.pow(currentMode.nz / dim.z, 2)
       );
+    }
+
+    // Rigid-wall rectangular-room resonance: f = (c / 2) · sqrt((nx/Lx)² + (ny/Ly)² + (nz/Lz)²)
+    function updateFrequency() {
+      const freq = getModeFrequency();
       document.getElementById('frequency').textContent = freq.toFixed(2) + ' Hz';
       document.getElementById('mode-nx').textContent = currentMode.nx;
       document.getElementById('mode-ny').textContent = currentMode.ny;
@@ -483,31 +512,35 @@
       const dt = Math.min((now - lastFrame) / 1000, 0.1);
       lastFrame = now;
 
-      if (isAnimating) localTime += 1.8 * speed * dt;   // independent of the display refresh rate
+      if (isAnimating && getModeFrequency() > 0) localTime += 1.8 * animationSpeed * dt;
       if (autoRotate && pointers.size === 0) {
         modelAngle += THREE.MathUtils.degToRad(rotSpeedDeg) * dt;
       }
-      model.rotation.y = modelAngle;
+      model.rotation.z = modelAngle;
 
       const { nx, ny, nz } = currentMode;
-      const amp = 0.24 * sphereFactor;
+      const amp = 0.4 * Math.min(dim.x, dim.y, dim.z) / resolution;
+      const kx = nx / dim.x, ky = ny / dim.y, kz = nz / dim.z;
+      const maxK = Math.max(kx, ky, kz);
       for (const sphere of spheres) {
         const { u, v, w } = sphere.userData;
         const pressure = calculatePressure(u, v, w, nx, ny, nz, localTime);
-        const displacement = pressure * amp;
-
-        const dx = nx > 0 ? Math.sin(nx * Math.PI * (u + 0.5)) * displacement : 0;
-        const dy = nz > 0 ? Math.sin(nz * Math.PI * (v + 0.5)) * displacement : 0;
-        const dz = ny > 0 ? Math.sin(ny * Math.PI * (w + 0.5)) * displacement : 0;
+        const sx = Math.sin(nx * Math.PI * (u + 0.5));
+        const sy = Math.sin(ny * Math.PI * (v + 0.5));
+        const sz = Math.sin(nz * Math.PI * (w + 0.5));
+        const cx = Math.cos(nx * Math.PI * (u + 0.5));
+        const cy = Math.cos(ny * Math.PI * (v + 0.5));
+        const cz = Math.cos(nz * Math.PI * (w + 0.5));
+        const phase = Math.cos(localTime);
+        const dx = maxK > 0 ? -amp * (kx / maxK) * sx * cy * cz * phase : 0;
+        const dy = maxK > 0 ? -amp * (ky / maxK) * cx * sy * cz * phase : 0;
+        const dz = maxK > 0 ? -amp * (kz / maxK) * cx * cy * sz * phase : 0;
         sphere.position.set(u * dim.x + dx, v * dim.y + dy, w * dim.z + dz);
 
-        const scale = sphereFactor * (1 + Math.abs(pressure) * 0.5);
-        sphere.scale.set(scale, scale, scale);
-
-        const intensity = (pressure + 1) / 2;
-        sphere.material.color.setHSL(0.55 + intensity * 0.15, 1, 0.5);
-        sphere.material.emissive.setHSL(0.55 + intensity * 0.15, 1, intensity * 0.3);
-        sphere.material.opacity = 0.6 + Math.abs(pressure) * 0.4;
+        const magnitude = Math.abs(pressure);
+        pressureColor.copy(negativePressureColor).lerp(positivePressureColor, (pressure + 1) / 2);
+        sphere.material.color.copy(pressureColor);
+        sphere.material.emissive.copy(pressureColor).multiplyScalar(0.14 + 0.08 * magnitude);
       }
 
       updateCamera();
@@ -517,8 +550,8 @@
     // ---------- UI: dimensions ----------
     const DIM_UI = [
       { key: 'x', label: 'X · length', color: '#ff5555' },
-      { key: 'y', label: 'Y · height', color: '#44dd44' },
-      { key: 'z', label: 'Z · depth',  color: '#6688ff' }
+      { key: 'y', label: 'Y · width', color: '#44dd44' },
+      { key: 'z', label: 'Z · height', color: '#6688ff' }
     ];
     const dimRanges = {}, dimInputs = {};
     const dimsBox = document.getElementById('dims');
@@ -611,8 +644,8 @@
     };
 
     document.getElementById('speed').oninput = e => {
-      speed = parseFloat(e.target.value);
-      document.getElementById('speed-value').textContent = speed + 'x';
+      animationSpeed = parseFloat(e.target.value);
+      document.getElementById('speed-value').textContent = animationSpeed + 'x';
     };
 
     document.getElementById('rot-speed').oninput = e => {
